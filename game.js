@@ -8,7 +8,7 @@ class MainScene extends Phaser.Scene {
         this.platformPool = null;
         this.lastPlatformY = 550;
         this.cleanupBoundary = 1000;
-        this.maxParticles = 100;
+        this.maxParticles = 20;
         this.activeParticles = new Set();
         this.cameraScrollSpeed = 1; // Base scroll speed
         this.nextPlatformY = 550;
@@ -67,20 +67,13 @@ class MainScene extends Phaser.Scene {
         this.lastPlatformY = 550;
         this.platformYDistance = 120;
         this.maxPlatforms = 15;
-
+        this.maxParticles = 20;
+        this.activeParticles = new Set();
+        
         // Set world bounds - only constrain horizontally
         this.physics.world.setBounds(0, -Infinity, 800, Infinity);
         
-        // Create UI container that stays fixed
-        this.uiContainer = this.add.container(0, 0);
-        this.uiContainer.setScrollFactor(0);
-        
-        // Create water as UI element that stays at bottom
-        this.water = this.add.tileSprite(400, 600, 800, 80, 'water');
-        this.water.setOrigin(0.5, 1);
-        this.uiContainer.add(this.water);
-        
-        // Create background
+        // Create background with parallax stars
         this.createBackground();
         
         // Initialize game objects
@@ -91,38 +84,74 @@ class MainScene extends Phaser.Scene {
         // Create player with physics
         this.player = this.physics.add.sprite(400, 500, 'player');
         this.player.setCircle(14);
-        // Only constrain player horizontally
         this.player.setCollideWorldBounds(true);
+        
+        // Add glow effect to player
+        this.playerGlow = this.add.sprite(400, 500, 'player');
+        this.playerGlow.setScale(1.2);
+        this.playerGlow.setAlpha(0.3);
+        this.playerGlow.setTint(0x00ff00);
         
         // Create starting platforms
         this.createStartingPlatforms();
         
+        // Create water visual - much larger now
+        const waterHeight = 400; // Increased height
+        this.waterGraphics = this.add.tileSprite(400, 800, 1200, waterHeight, 'water');
+        this.waterGraphics.setDepth(1000);
+        this.waterGraphics.setOrigin(0.5, 0);
+        
+        // Create water physics body - matching the visual size
+        this.waterCollider = this.physics.add.sprite(400, 800, 'water');
+        this.waterCollider.displayWidth = 1200;
+        this.waterCollider.displayHeight = waterHeight;
+        this.waterCollider.setOrigin(0.5, 0);
+        this.waterCollider.refreshBody();
+        this.waterCollider.setImmovable(true);
+        this.waterCollider.body.allowGravity = false;
+        this.waterCollider.setVisible(false);
+        
         // Setup collisions
-        this.physics.add.collider(this.player, this.platforms);
+        this.physics.add.collider(this.player, this.platforms, this.handlePlatformCollision, null, this);
+        this.physics.add.overlap(this.player, this.waterCollider, this.handleWaterCollision, null, this);
         
         // Setup camera with vertical focus
         this.cameras.main.startFollow(this.player, true, 0, 0.1);
-        this.cameras.main.setDeadzone(0, 200); // Remove horizontal deadzone
-        this.cameras.main.setBounds(0, -Infinity, 800, Infinity); // Allow infinite vertical movement
+        this.cameras.main.setDeadzone(0, 200);
+        this.cameras.main.setBounds(0, -Infinity, 800, Infinity);
         
         // Setup controls
         this.cursors = this.input.keyboard.createCursorKeys();
         
-        // Score text
+        // Score text with style
         this.scoreText = this.add.text(16, 16, 'Score: 0', {
             fontSize: '20px',
             fontFamily: '"Press Start 2P"',
-            fill: '#fff'
+            fill: '#fff',
+            padding: { x: 8, y: 8 },
+            shadow: { color: '#000', fill: true, offsetX: 2, offsetY: 2, blur: 4 }
         });
         this.scoreText.setScrollFactor(0);
         
-        // Start text
+        // Start text with animation
         this.startText = this.add.text(400, 300, 'Press SPACE to Start', {
             fontSize: '24px',
             fontFamily: '"Press Start 2P"',
-            fill: '#fff'
+            fill: '#fff',
+            padding: { x: 16, y: 16 },
+            shadow: { color: '#000', fill: true, offsetX: 2, offsetY: 2, blur: 4 }
         }).setOrigin(0.5);
         this.startText.setScrollFactor(0);
+        
+        // Animate start text
+        this.tweens.add({
+            targets: this.startText,
+            alpha: 0.5,
+            yoyo: true,
+            repeat: -1,
+            duration: 1000,
+            ease: 'Sine.easeInOut'
+        });
         
         // Setup space key
         this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
@@ -142,6 +171,18 @@ class MainScene extends Phaser.Scene {
 
         if (this.gameOver) return;
 
+        // Update background
+        this.updateBackground();
+
+        // Update water position to follow camera - slightly lower
+        const cameraY = this.cameras.main.scrollY;
+        const waterY = cameraY + this.cameras.main.height - 180; // Adjusted to -180 (between -100 and -250)
+        this.waterGraphics.y = waterY;
+        this.waterCollider.y = waterY;
+        
+        // Update water animation
+        this.waterGraphics.tilePositionX += 0.5;
+
         // Player movement with horizontal bounds check
         if (this.cursors.left.isDown && this.player.x > 20) {
             this.player.setVelocityX(-300);
@@ -151,29 +192,95 @@ class MainScene extends Phaser.Scene {
             this.player.setVelocityX(0);
         }
 
-        // Jumping
+        // Jumping with particle effect
         if (this.cursors.up.isDown && this.player.body.touching.down) {
             this.player.setVelocityY(-400);
+            this.createJumpEffect();
         }
+
+        // Update player glow position
+        this.playerGlow.x = this.player.x;
+        this.playerGlow.y = this.player.y;
 
         // Platform generation
         this.managePlatforms();
 
-        // Update score based on highest point reached
+        // Update score with effect
         const newScore = Math.floor(Math.abs(this.player.y - 550) / 10);
         if (newScore > this.score) {
             this.score = newScore;
             this.scoreText.setText('Score: ' + this.score);
-        }
-
-        // Check for game over - when player touches water
-        const waterY = this.cameras.main.scrollY + this.cameras.main.height - 40;
-        if (this.player.y > waterY) {
-            this.gameOverHandler();
+            if (this.score % 10 === 0) {
+                this.createScoreEffect();
+            }
         }
 
         // Keep camera centered horizontally
         this.cameras.main.scrollX = 0;
+    }
+
+    createJumpEffect() {
+        if (this.activeParticles.size >= this.maxParticles) return;
+        
+        const particles = this.add.particles(this.player.x, this.player.y + 14, 'particle', {
+            speed: { min: 50, max: 100 },
+            angle: { min: 60, max: 120 },
+            scale: { start: 0.4, end: 0 },
+            lifespan: 300,
+            quantity: 5,
+            tint: 0x00ff00
+        });
+        
+        this.activeParticles.add(particles);
+        this.time.delayedCall(300, () => {
+            particles.destroy();
+            this.activeParticles.delete(particles);
+        });
+    }
+
+    createScoreEffect() {
+        const scoreEffect = this.add.text(
+            this.scoreText.x + this.scoreText.width + 20,
+            this.scoreText.y,
+            '+10',
+            {
+                fontSize: '20px',
+                fontFamily: '"Press Start 2P"',
+                fill: '#00ff00'
+            }
+        ).setScrollFactor(0);
+
+        this.tweens.add({
+            targets: scoreEffect,
+            alpha: 0,
+            y: this.scoreText.y - 30,
+            duration: 1000,
+            ease: 'Power2',
+            onComplete: () => scoreEffect.destroy()
+        });
+    }
+
+    handlePlatformCollision(player, platform) {
+        if (player.body.touching.down && !platform.touched) {
+            platform.touched = true;
+            this.createPlatformTouchEffect(platform);
+        }
+    }
+
+    createPlatformTouchEffect(platform) {
+        const touchEffect = this.add.sprite(platform.x, platform.y - 5, 'platform');
+        touchEffect.setAlpha(0.5);
+        touchEffect.setTint(0x00ff00);
+
+        this.tweens.add({
+            targets: touchEffect,
+            alpha: 0,
+            scaleX: 1.2,
+            scaleY: 1.2,
+            duration: 300,
+            ease: 'Power2',
+            onComplete: () => touchEffect.destroy()
+        });
     }
 
     managePlatforms() {
@@ -327,17 +434,6 @@ class MainScene extends Phaser.Scene {
         });
     }
 
-    handlePlatformCollision(player, platform) {
-        if (player.body.touching.down) {
-            this.createParticleEffect(platform.x, platform.y - 8, {
-                speed: { min: -50, max: 50 },
-                scale: { start: 0.2, end: 0 },
-                tint: 0x4a9eff,
-                quantity: 5
-            });
-        }
-    }
-
     startGame() {
         this.gameStarted = true;
         
@@ -350,6 +446,77 @@ class MainScene extends Phaser.Scene {
             onComplete: () => {
                 this.startText.destroy();
                 this.startText = null;
+            }
+        });
+    }
+
+    handleWaterCollision(player, water) {
+        if (!this.gameOver) {
+            this.gameOver = true;
+            
+            // Create splash effect at collision point
+            this.createWaterSplashEffect(player.x, water.y);
+            
+            // Stop player movement and add sinking effect
+            player.setVelocity(0, 50);
+            player.body.setAllowGravity(false);
+            
+            // Show game over text
+            this.showGameOver();
+        }
+    }
+
+    createWaterSplashEffect(x, y) {
+        if (this.activeParticles.size >= this.maxParticles) return;
+        
+        const particles = this.add.particles(x, y, 'particle', {
+            speed: { min: 100, max: 200 },
+            angle: { min: 30, max: 150 }, // Wider angle for bigger splash
+            scale: { start: 0.6, end: 0 }, // Larger particles
+            lifespan: 800, // Longer lasting particles
+            quantity: 15, // More particles
+            tint: 0x00ffff
+        });
+        
+        this.activeParticles.add(particles);
+        this.time.delayedCall(800, () => {
+            particles.destroy();
+            this.activeParticles.delete(particles);
+        });
+    }
+
+    showGameOver() {
+        // Game Over text with style
+        const gameOverText = this.add.text(400, 200, 'Game Over!', {
+            fontSize: '48px',
+            fontFamily: '"Press Start 2P"',
+            fill: '#ff0000',
+            padding: { x: 20, y: 20 },
+            shadow: { color: '#000', fill: true, offsetX: 2, offsetY: 2, blur: 4 }
+        }).setOrigin(0.5).setScrollFactor(0);
+
+        // Final score
+        const finalScoreText = this.add.text(400, 300, 'Final Score: ' + this.score, {
+            fontSize: '24px',
+            fontFamily: '"Press Start 2P"',
+            fill: '#fff',
+            padding: { x: 20, y: 20 },
+            shadow: { color: '#000', fill: true, offsetX: 2, offsetY: 2, blur: 4 }
+        }).setOrigin(0.5).setScrollFactor(0);
+
+        // Restart prompt
+        const restartText = this.add.text(400, 400, 'Press Space to Restart', {
+            fontSize: '20px',
+            fontFamily: '"Press Start 2P"',
+            fill: '#fff',
+            padding: { x: 20, y: 20 },
+            shadow: { color: '#000', fill: true, offsetX: 2, offsetY: 2, blur: 4 }
+        }).setOrigin(0.5).setScrollFactor(0);
+
+        // Enable space key for restart
+        this.spaceKey.on('down', () => {
+            if (this.gameOver) {
+                this.scene.restart();
             }
         });
     }
@@ -477,28 +644,6 @@ class MainScene extends Phaser.Scene {
         // Clear all game objects
         this.children.each(child => {
             child.destroy();
-        });
-    }
-
-    createScoreEffect() {
-        const scoreParticle = this.add.text(
-            this.scoreText.x + this.scoreText.width + 20,
-            this.scoreText.y,
-            '+1',
-            {
-                fontSize: '20px',
-                fontFamily: '"Press Start 2P"',
-                fill: '#00ff00'
-            }
-        ).setScrollFactor(0);
-
-        this.tweens.add({
-            targets: scoreParticle,
-            y: this.scoreText.y - 30,
-            alpha: 0,
-            duration: 1000,
-            ease: 'Power2',
-            onComplete: () => scoreParticle.destroy()
         });
     }
 }
